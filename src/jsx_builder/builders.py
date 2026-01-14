@@ -6,7 +6,11 @@ import re
 import types
 from os import path
 from pathlib import Path
-from typing import TYPE_CHECKING , Any
+from typing import IO, TYPE_CHECKING , Any, Protocol
+
+import json
+
+from collections import UserString
 
 from sphinx.application import ENV_PICKLE_FILENAME, Sphinx
 from sphinx.builders.html import BuildInfo, StandaloneHTMLBuilder
@@ -18,14 +22,13 @@ from jsx_builder import jsxfileimpl
 
 from jsx_builder.translator import JSXTranslator
 
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-    from typing import Any, Protocol
+class JsxOutputImplementation(Protocol):
+        def createPage(self, obj: Any, *args: Any, **kwds: Any) -> None: ...
+        def createAsset(self, obj: Any, *args: Any, **kwds: Any) -> None: ...
+        def createSection(self, obj: Any, *args: Any, **kwds: Any) -> None: ...
+        def finalize(self, obj: Any, *args: Any, **kwds: Any) -> None: ...
+        def dump(self, obj: Any, file: Any, *args: Any, **kwds: Any) -> None: ...
 
-    class JsxOutputImplementation(Protocol):
-        def createPage(self, obj: Any, *args: Any, **kwargs: Any) -> None: ...
-        def createAsset(self, obj: Any, *args: Any, **kwargs: Any) -> None: ...
-        def dump(self, obj: Any, file: Any, *args: Any, **kwargs: Any) -> None: ...
 
 logger = sphinx_logging.getLogger(__name__)
 
@@ -39,7 +42,8 @@ class JSXBuilder(StandaloneHTMLBuilder):
     file_suffix = ".html"
     links_suffix = None
 
-    implementation: Any
+    implementation: JsxOutputImplementation
+
     implementation_dumps_unicode = False
 
     # Use JSX translator to generate JSX components directly
@@ -89,12 +93,9 @@ class JSXBuilder(StandaloneHTMLBuilder):
         ctx.setdefault('pathto', lambda p: p)
         #self.add_sidebars(pagename, ctx)
 
-
-
         if not outfilename:
             outfilename = path.join(self.outdir,
                                     os_path(pagename) + self.out_suffix)
-
 
         self.app.emit('html-page-context', pagename, templatename, ctx, event_arg)
 
@@ -128,6 +129,8 @@ class JSXBuilder(StandaloneHTMLBuilder):
 
         outfilename = path.join(self.outdir, self.globalcontext_filename)
         self.dump_context(self.globalcontext, outfilename)
+
+        self.implementation.finalize(obj=self.globalcontext, outDir=self.outdir)
 
         # super here to dump the search index
         super().handle_finish()
@@ -168,6 +171,32 @@ class JSXBuilder(StandaloneHTMLBuilder):
 
 
 
+class SphinxJSONEncoder(json.JSONEncoder):
+    """JSONEncoder subclass that forces translation proxies."""
+    def default(self, obj: Any) -> str:
+        if isinstance(obj, UserString):
+            return str(obj)
+        return super().default(obj)
+    
+class JsxFileOutputImplementation(JsxOutputImplementation):
+    """JSON serializer implementation wrapper."""
+    def dump(self, obj: Any, file: IO[str] | IO[bytes], *args: Any, **kwds: Any) -> None:
+        kwds['cls'] = SphinxJSONEncoder
+        json.dump(obj, file, *args, **kwds)
+    
+    def createPage(self, obj: Any, *args: Any, **kwds: Any) -> None:
+        if kwds["outDir"]:
+
+            if isinstance(obj, dict) and "current_page_name" in obj and "body" in obj:
+                with open(f"{kwds['outDir']}/{obj['current_page_name']}.html", "w", encoding="utf-8") as f:
+                    f.write(obj["body"])
+    def createAsset(self, obj: Any, *args: Any, **kwds: Any) -> None:
+        pass  # Implement asset creation if needed
+    def createSection(self, obj: Any, *args: Any, **kwds: Any) -> None:
+        pass  # Implement section creation if needed
+    def finalize(self, obj: Any, *args: Any, **kwds: Any) -> None:
+        pass  # Implement finalization if needed
+
 
 class JSONJSXBuilder(JSXBuilder):
     """
@@ -176,7 +205,7 @@ class JSONJSXBuilder(JSXBuilder):
     name = 'jjson'
     epilog = 'You can now process the JSON files in %(outdir)s.'
 
-    implementation = jsxfileimpl
+    implementation = JsxFileOutputImplementation()
     implementation_dumps_unicode = True
     additional_dump_args: tuple[Any] = ()
     out_suffix = '.fjson'

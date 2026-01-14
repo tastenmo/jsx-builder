@@ -7,6 +7,8 @@ from collections import UserString
 from typing import IO, Any
 
 
+
+
 class SphinxJSONEncoder(json.JSONEncoder):
     """JSONEncoder subclass that forces translation proxies."""
     def default(self, obj: Any) -> str:
