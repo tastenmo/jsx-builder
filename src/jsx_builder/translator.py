@@ -2,6 +2,7 @@
 
 import logging
 import re
+import hashlib
 from typing import Any
 
 from docutils import nodes
@@ -22,15 +23,21 @@ class JSXTranslator(HTML5Translator):
 
         # Track JSX components used for import generation
         self.jsx_components_used = set()
+        
+        # Section tree tracking
+        self.section_list = []
+        self._section_stack = []
 
     def visit_section(self, node: Element) -> None:
         """Handle section start - add JSX Section component if needed."""
         self.jsx_components_used.add('Section')
         self.section_level += 1
         attrs = []
+        
+        # Handle IDs
         ids = node.get('ids', [])
-        if ids:
-            id_str = ' '.join(ids)
+        id_str = ' '.join(ids) if ids else ''
+        if id_str:
             attrs.append(f'id="{id_str}"')
         
         attrs.append(f'level="{self.section_level}"')
@@ -43,6 +50,7 @@ class JSXTranslator(HTML5Translator):
         
         # Add section number if available
         secnumber = self.get_secnumber(node)
+        secnumber_str = ''
         if secnumber:
             secnumber_str = '.'.join(map(str, secnumber))
             attrs.append(f'secnumber="{secnumber_str}"')
@@ -54,25 +62,65 @@ class JSXTranslator(HTML5Translator):
                 title_text = child.astext()
                 break
         
+        # Generate hash for the section based on readable content
+        content_parts = []
+        for child in node.children:
+            # Exclude nested sections from the hash content to avoid dependency on children
+            if not isinstance(child, nodes.section):
+                content_parts.append(child.astext())
+        
+        hash_content = "\n".join(content_parts)
+        section_hash = hashlib.md5(hash_content.encode('utf-8')).hexdigest()
+        attrs.append(f'hash="{section_hash}"')
+
+        # Build tree node
+        section_node = {
+            'id': id_str,
+            'title': title_text,
+            'level': self.section_level,
+            'secnumber': secnumber_str,
+            'hash': section_hash,
+            'source': node.source,
+            'startline': node.line,
+            'children': []
+        }
+
+        # Push to stack
+        self._section_stack.append(section_node)
+        
         if title_text:
             attrs.append(f'title="{self._escape_attr(title_text)}"')
 
+        section_node['start_index'] = len(self.body)
         self.body.append(f'<Section {" ".join(attrs)}>')
         self.context.append('</Section>')
 
     def depart_section(self, node: Element) -> None:
         """Handle section end - close JSX Section component."""
+        self.jsx_components_used.add('SectionRef')
         self.section_level -= 1
         self.body.append(self.context.pop())
 
-    def visit_title(self, node: Element) -> None:
-        """Handle title element - skip as title is handled in Section."""
-        if isinstance(node.parent, nodes.section):      
-            raise nodes.SkipNode
-        else:
-            super().visit_title(node)
+        
+        # Capture section body content
+        if self._section_stack:
+            section_node = self._section_stack.pop()
+            if 'start_index' in section_node:
+                start_idx = section_node['start_index']
+                # Capture the full content including wrapper
+                section_node['body'] = "".join(self.body[start_idx:])
+                if node.line:
+                    section_node['endline'] = node.line
 
-
+                del section_node['start_index']
+                
+                # Remove content from main body and replace with SectionRef
+                del self.body[start_idx:]
+                self.body.append(f'<SectionRef hash="{section_node["hash"]}" />')
+                
+                # Add to flat list
+                self.section_list.append(section_node)
+        
     def visit_table(self, node: Element) -> None:
         """Handle table element - use JSX Table component."""
         self.jsx_components_used.add('Table')

@@ -205,3 +205,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+tests/_build/
+docs/_build/
+tests/_build/base/doctrees/environment.pickle

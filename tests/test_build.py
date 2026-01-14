@@ -58,4 +58,4 @@ def test_tutorial_jjson_jsx_body(sphinx_build_factory: any) -> None:
     assert len(body) > 0, "Body should not be empty"
     
     # Check for JSX Section elements in the body
-    assert '<Section' in body or '<section' in body, "No Section/section elements found in body"
+    assert '<SectionRef' in body, "No SectionRef elements found in body"

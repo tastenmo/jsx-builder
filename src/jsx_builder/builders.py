@@ -89,12 +89,20 @@ class JSXBuilder(StandaloneHTMLBuilder):
         ctx.setdefault('pathto', lambda p: p)
         #self.add_sidebars(pagename, ctx)
 
+
+
         if not outfilename:
             outfilename = path.join(self.outdir,
                                     os_path(pagename) + self.out_suffix)
 
 
         self.app.emit('html-page-context', pagename, templatename, ctx, event_arg)
+
+        # Add section tree to context if available from the translator
+        if hasattr(self, 'docwriter') and hasattr(self.docwriter, 'visitor'):
+            visitor = self.docwriter.visitor
+            if hasattr(visitor, 'section_list'):
+                ctx['section_list'] = visitor.section_list
 
         # make context object serializable
         for key in list(ctx):
