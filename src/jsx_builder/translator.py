@@ -62,15 +62,22 @@ class JSXTranslator(HTML5Translator):
                 title_text = child.astext()
                 break
         
-        # Generate hash for the section based on readable content
-        content_parts = []
+        # Generate hash for the section based on structure and content
+        content_parts = [f"title:{title_text}"]
         for child in node.children:
             # Exclude nested sections from the hash content to avoid dependency on children
             if not isinstance(child, nodes.section):
-                content_parts.append(child.astext())
+                # Create a signature including type, attributes, and content
+                # Sort attributes for deterministic hashing
+                child_attrs = sorted(
+                    (k, str(v)) for k, v in child.attributes.items() 
+                    if k not in ('ids', 'names', 'dupnames', 'backrefs', 'source', 'line')
+                )
+                sig = f"[{child.tagname}]{child_attrs}:{child.astext()}"
+                content_parts.append(sig)
         
         hash_content = "\n".join(content_parts)
-        section_hash = hashlib.md5(hash_content.encode('utf-8')).hexdigest()
+        section_hash = hashlib.sha1(hash_content.encode('utf-8')).hexdigest()
         attrs.append(f'hash="{section_hash}"')
 
         # Build tree node
