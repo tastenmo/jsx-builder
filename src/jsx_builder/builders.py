@@ -130,7 +130,15 @@ class JSXBuilder(StandaloneHTMLBuilder):
         outfilename = path.join(self.outdir, self.globalcontext_filename)
         self.dump_context(self.globalcontext, outfilename)
 
-        self.implementation.finalize(obj=self.globalcontext, outDir=self.outdir)
+        django_cfg = getattr(self.config, 'django', None)
+        DocId = django_cfg.get('docId', None) if isinstance(django_cfg, dict) else None
+
+                # make context object serializable
+        for key in list(self.globalcontext):
+            if isinstance(self.globalcontext[key], types.FunctionType):
+                del self.globalcontext[key]
+
+        self.implementation.finalize(obj=self.globalcontext, outDir=self.outdir, docId=DocId)
 
         # super here to dump the search index
         super().handle_finish()
@@ -174,9 +182,16 @@ class JSXBuilder(StandaloneHTMLBuilder):
 class SphinxJSONEncoder(json.JSONEncoder):
     """JSONEncoder subclass that forces translation proxies."""
     def default(self, obj: Any) -> str:
+        # Handle Sphinx-specific helper objects (_JavaScript, translation proxies, etc.)
         if isinstance(obj, UserString):
             return str(obj)
-        return super().default(obj)
+        if obj.__class__.__name__ == '_JavaScript':
+            return str(obj)
+        try:
+            return super().default(obj)
+        except TypeError:
+            # Fallback: stringify any other non-serializable object
+            return str(obj)
     
 class JsxFileOutputImplementation(JsxOutputImplementation):
     """JSON serializer implementation wrapper."""
