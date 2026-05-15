@@ -26,7 +26,23 @@ class JSXTranslator(HTML5Translator):
         
         # Section tree tracking
         self.section_list = []
+        self.section_tree = []
         self._section_stack = []
+        self._section_order_counter = 0
+
+    def _make_toc_node(self, section_node: dict[str, Any]) -> dict[str, Any]:
+        """Create a compact TOC node representation from a section node."""
+        return {
+            'id': section_node.get('id', ''),
+            'title': section_node.get('title', ''),
+            'level': section_node.get('level', 1),
+            'hash': section_node.get('hash', ''),
+            'source': section_node.get('source', ''),
+            'startline': section_node.get('startline', 0),
+            'endline': section_node.get('endline', 0),
+            'order_index': section_node.get('order_index', 0),
+            'children': section_node.get('children', []),
+        }
 
     def visit_section(self, node: Element) -> None:
         """Handle section start - add JSX Section component if needed."""
@@ -89,8 +105,10 @@ class JSXTranslator(HTML5Translator):
             'hash': section_hash,
             'source': node.source,
             'startline': node.line,
+            'order_index': self._section_order_counter,
             'children': []
         }
+        self._section_order_counter += 1
 
         # Push to stack
         self._section_stack.append(section_node)
@@ -124,6 +142,14 @@ class JSXTranslator(HTML5Translator):
                 # Remove content from main body and replace with SectionRef
                 del self.body[start_idx:]
                 self.body.append(f'<SectionRef hash="{section_node["hash"]}" />')
+
+                if self._section_stack:
+                    parent_node = self._section_stack[-1]
+                    section_node['parent_hash'] = parent_node.get('hash', '')
+                    parent_node['children'].append(self._make_toc_node(section_node))
+                else:
+                    section_node['parent_hash'] = ''
+                    self.section_tree.append(self._make_toc_node(section_node))
                 
                 # Add to flat list
                 self.section_list.append(section_node)
@@ -243,6 +269,81 @@ class JSXTranslator(HTML5Translator):
     def depart_entry(self, node: Element) -> None:
         """Close table cell element."""
         self.body.append(self.context.pop())
+
+    def _build_image_attrs(self, node: Element, caption: str = '') -> list[str]:
+        """Build JSX attributes for Image component from docutils image node."""
+        attrs = []
+
+        uri = node.get('uri', '')
+        if uri:
+            attrs.append(f'src="{self._escape_attr(str(uri))}"')
+
+        alt = node.get('alt') or caption
+        if alt:
+            attrs.append(f'alt="{self._escape_attr(str(alt))}"')
+
+        if caption:
+            attrs.append(f'caption="{self._escape_attr(str(caption))}"')
+
+        classes = node.get('classes', [])
+        if classes:
+            attrs.append(f'className="{self._escape_attr(" ".join(classes))}"')
+
+        for attr_name in ('width', 'height', 'align', 'scale'):
+            value = node.get(attr_name)
+            if value not in (None, ''):
+                jsx_attr = self._html_attr_to_jsx(attr_name)
+                attrs.append(f'{jsx_attr}="{self._escape_attr(str(value))}"')
+
+        if node.source:
+            attrs.append(f'source="{self._escape_attr(str(node.source))}"')
+        if node.line:
+            attrs.append(f'line="{node.line}"')
+
+        return attrs
+
+    def visit_image(self, node: Element) -> None:
+        """Translate docutils image node to JSX Image component."""
+        self.jsx_components_used.add('Image')
+        attrs = self._build_image_attrs(node)
+        attr_string = ' ' + ' '.join(attrs) if attrs else ''
+        self.body.append(f'<Image{attr_string} />')
+        raise nodes.SkipNode
+
+    def visit_figure(self, node: Element) -> None:
+        """Translate docutils figure node to a JSX Image component."""
+        self.jsx_components_used.add('Image')
+
+        image_node = next((child for child in node.children if isinstance(child, nodes.image)), None)
+        if image_node is None:
+            return
+
+        caption_node = next((child for child in node.children if isinstance(child, nodes.caption)), None)
+        caption = caption_node.astext() if caption_node else ''
+
+        attrs = self._build_image_attrs(image_node, caption=caption)
+
+        figure_classes = node.get('classes', [])
+        if figure_classes:
+            class_attr = next((attr for attr in attrs if attr.startswith('className=')), None)
+            if class_attr:
+                attrs.remove(class_attr)
+                existing_classes = class_attr.split('="', 1)[1].rstrip('"')
+                merged_classes = ' '.join(
+                    part for part in (existing_classes, ' '.join(figure_classes)) if part
+                )
+                attrs.append(f'className="{self._escape_attr(merged_classes)}"')
+            else:
+                attrs.append(f'className="{self._escape_attr(" ".join(figure_classes))}"')
+
+        if node.source:
+            attrs.append(f'figureSource="{self._escape_attr(str(node.source))}"')
+        if node.line:
+            attrs.append(f'figureLine="{node.line}"')
+
+        attr_string = ' ' + ' '.join(attrs) if attrs else ''
+        self.body.append(f'<Image{attr_string} />')
+        raise nodes.SkipNode
 
     def visit_reference(self, node: Element) -> None:
         """Handle reference (link) - use JSX Link component for internal links."""

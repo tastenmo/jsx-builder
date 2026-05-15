@@ -48,6 +48,9 @@ class JSXBuilder(StandaloneHTMLBuilder):
 
     # Use JSX translator to generate JSX components directly
     default_translator_class = JSXTranslator
+    image_extensions = {
+        '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico', '.avif', '.tif', '.tiff'
+    }
 
     def init(self) -> None:
         self.build_info = BuildInfo(self.config, self.tags)
@@ -104,6 +107,8 @@ class JSXBuilder(StandaloneHTMLBuilder):
             visitor = self.docwriter.visitor
             if hasattr(visitor, 'section_list'):
                 ctx['section_list'] = visitor.section_list
+            if hasattr(visitor, 'section_tree'):
+                ctx['section_tree'] = visitor.section_tree
 
         # make context object serializable
         for key in list(ctx):
@@ -127,6 +132,8 @@ class JSXBuilder(StandaloneHTMLBuilder):
 
     def handle_finish(self) -> None:
 
+        self.globalcontext['toc_pages'] = self._build_toc_pages()
+
         outfilename = path.join(self.outdir, self.globalcontext_filename)
         self.dump_context(self.globalcontext, outfilename)
 
@@ -143,6 +150,12 @@ class JSXBuilder(StandaloneHTMLBuilder):
         # super here to dump the search index
         super().handle_finish()
 
+        # Notify implementation about all static image assets copied by Sphinx.
+        # At this point _images/_static already exist in outdir.
+        static_image_assets = self._collect_static_images()
+        for asset in static_image_assets:
+            self.implementation.createAsset(obj=asset, outDir=self.outdir, docId=DocId)
+
         # copy the environment file from the doctree dir to the output dir
         # as needed by the web app
         copyfile(path.join(self.doctreedir, ENV_PICKLE_FILENAME),
@@ -154,6 +167,60 @@ class JSXBuilder(StandaloneHTMLBuilder):
 
                 
         logger.info("JSX HTML build complete!")
+
+    def _build_toc_pages(self) -> list[str]:
+        """Build a deterministic page order from Sphinx toctree relations."""
+        master_doc = getattr(self.config, 'master_doc', None)
+        toctree = getattr(self.env, 'toctree_includes', {})
+        found_docs = sorted(getattr(self.env, 'found_docs', []))
+
+        ordered: list[str] = []
+        visited: set[str] = set()
+
+        def walk(docname: str) -> None:
+            if docname in visited:
+                return
+            visited.add(docname)
+            ordered.append(docname)
+            for child in toctree.get(docname, []):
+                walk(child)
+
+        if master_doc:
+            walk(master_doc)
+
+        for docname in found_docs:
+            if docname not in visited:
+                ordered.append(docname)
+
+        return ordered
+
+    def _collect_static_images(self) -> list[dict[str, str]]:
+        """Collect static image assets from standard Sphinx output folders."""
+        assets: list[dict[str, str]] = []
+        static_dirs = [
+            Path(self.outdir) / self.imagedir,
+            Path(self.outdir) / '_static',
+        ]
+
+        for base_dir in static_dirs:
+            if not base_dir.exists():
+                continue
+
+            for file_path in base_dir.rglob('*'):
+                if not file_path.is_file():
+                    continue
+
+                if file_path.suffix.lower() not in self.image_extensions:
+                    continue
+
+                rel_path = file_path.relative_to(self.outdir).as_posix()
+                assets.append({
+                    'path': rel_path,
+                    'filename': file_path.name,
+                    'absolute_path': str(file_path),
+                })
+
+        return assets
 
     def _apply_jsx_attribute_fixes(self, html_file: Path):
         """Apply minimal JSX attribute fixes to HTML file."""
